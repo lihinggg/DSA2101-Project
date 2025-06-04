@@ -1,0 +1,317 @@
+---
+title: "DSA 2101 Group Project"
+author: "Kyi Wai Thant, Goh Ming Han, Meredith Tan, Ng Li Hing & Rikhil Singh"
+date: "`r Sys.Date()`"
+output: 
+  html_document: 
+    theme: readable
+    highlight: textmate
+---
+
+<style>
+p {
+  text-align: justify;
+}
+
+.caption {
+  text-align: center !important;
+}
+
+.footnote, .footnotes p {
+  text-align: left !important;
+}
+// for justification of paragraphs all
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Mountainous Muggers
+
+
+Hello and welcome to our DSA 2101 project! In this project, our group explores data collated by The Himalayan Database^[The Himalayan Database, Elizabeth Hawley, https://www.himalayandatabase.com/index.html] in order to answer an overarching question we have - 'What makes people want to climb a mountain?' This may seem obvious at first 'site' - but when presented with the datasets in the given repository^[The History of Himalayan Mountaineering Expeditions, jonthegeek, https://github.com/rfordatascience/tidytuesday/blob/main/data/2025/2025-01-21/readme.md], we realised that there are numerous factors which entice people to climb up particular mountains. 
+With the available data - we have decided to approach this question on the basis of 3 main hypotheses, namely that
+
+- Certain countries are more likely to organise successful expeditions
+- Taller Mountains may prove to be more enticing to climb
+- Particular Seasons may be beneficial for mountain hikes across differing regions
+
+With these sub-questions in mind - as well as the unique plots crafted below - we aim to comprehensively ascertain: What makes someone want to mug up a mountain!
+
+
+```{r libraries, message=FALSE, warning=FALSE}
+# For package installation if necessary
+#install.packages("tidyverse")
+#install.packages("ggrepel")
+#install.packages("ggridges")
+#install.packages("maps")
+library(maps)
+library(readr)
+library(stringr)
+library(ggrepel)
+library(ggridges)
+library(tidyverse)
+```
+
+
+```{r Data Loading}
+# Loading the relevant files from the listed urls
+exped_tidy <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/exped_tidy.csv',show_col_types = FALSE)
+peaks_tidy <- read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/main/data/2025/2025-01-21/peaks_tidy.csv',show_col_types = FALSE) 
+```
+
+
+## Countries & Number of Successful Expeditions
+ 
+
+We begin with the analysis of the Nations that organise the greatest number of successful expeditions. For this, we utilise the `NATION` column in the exped_tidy dataframe - which, despite highlighting the principle nationality of the members in the expedition - has a high degree of overlap with the `SPONSOR` column that details the actual sponsor of the expedition. This relationship can be seen in the `nation_sponsor` variable. 
+
+In the interests of creating a plot that is not cluttered with overwhelming amounts of information - only countries that have had at least 10 expeditions (be they a success/failure) over the years are showcased on the plot. Fortunately - these countries also prove to be only in the Northern hemisphere - and the plot is thus amended to reflect this accordingly.
+
+
+```{r Map Processing}
+# showcase relationship between main nationality and sponsor group
+nation_sponsor <- exped_tidy %>% select(NATION, SPONSOR) %>% head()
+print(nation_sponsor) 
+
+all_expeds <- exped_tidy %>% group_by(NATION) %>% 
+  summarise(count = sum(!is.na(TERMREASON)))
+
+successful_expeds <- exped_tidy %>% filter(TERMREASON == 1) %>% 
+  group_by(NATION) %>% summarise(count = sum(!is.na(TERMREASON)))
+
+# get nations which have conducted at least 10 expeditions in total
+map_df <- all_expeds %>% inner_join(successful_expeds, by = "NATION", 
+  suffix=c("_all","_success")) %>% arrange(desc(count_all)) %>% 
+  mutate(success_percentage = count_success/count_all * 100) %>% 
+  filter(count_all >= 10) 
+
+# get coordinate locations for geom_polygon of the world
+world_map <- map_data("world") %>% 
+  filter(between(long, -180, 180))
+
+# filter for countries at/above the equator
+top_map <- world_map %>% filter(lat >= 0) 
+
+# check that the names of the nations in map_df tally with those in top_map
+all(map_df$NATION %in% sort(unique(top_map$region))) 
+
+
+all_above_equator <- top_map %>% filter(region %in% map_df$NATION) %>% 
+  mutate(truth_col = lat > 0) %>% summarise(unique(truth_col)) %>% pull()
+all_above_equator # check that none of the countries are below the equator
+
+world_joined <- full_join(map_df, top_map, by = c("NATION" = "region"))
+head(world_joined)
+
+# get coordinates for the labels to be placed on in the map
+label_data <- world_joined %>%
+  group_by(NATION, group) %>%
+  summarise(
+    n_points = n(),
+    long_center = mean(range(long, na.rm = TRUE)),
+    lat_center = mean(range(lat, na.rm = TRUE)),
+    count_success = first(count_success),
+    .groups = "drop"
+  ) %>%
+  group_by(NATION) %>%
+  slice_max(n_points, n = 1) %>% 
+  ungroup()
+
+```
+
+```{r Map Plot, warning=FALSE, fig.cap = "*Countries with the Greatest Number of Successful Expeditions (in order) are<br>- Nepal, USA, UK, India and China*", fig.align = 'center'}
+  # plot out the world as a canvas
+ggplot(world_joined, aes(x = long, y = lat, group = group)) +
+  # fill in specified countries with at least 10 expeditions; otherwise gray
+  geom_polygon(aes(fill = count_success), 
+               color = "gray60", linewidth=0.3) +
+  # have labels superimposed on map -> Country Name: Successful Expedition Count
+  geom_label_repel(data = label_data %>% 
+                 filter(!is.na(NATION), !is.na(count_success)),
+                 aes(x = long_center, y = lat_center, 
+                 label = paste0(NATION,": ",count_success)),
+                 size = 2.2, fill = "white", color = "black",
+                 fontface = "bold",box.padding = 0.2,
+                 inherit.aes = FALSE, max.overlaps = 10, direction = "both") + 
+  coord_fixed(1.75) + # fix ratio of the plot
+    scale_fill_viridis_c(option = "G", direction = -1, limits = c(0,120),
+                         na.value = "gray95") +
+  scale_x_continuous(limits = c(-180, 180), breaks = seq(-180,180, by = 60)) +
+  scale_y_continuous(limits = c(0, 90), breaks = seq(0,90, by = 30)) +
+  theme_minimal() +
+  theme(legend.position = "bottom") +
+  labs(title = "Number of Successful Expeditions for Nations with at least 10 Expeditions Total",
+       fill = "Successful Expeditions\n(Count)") +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12.5)) 
+```
+
+ 
+We can see from the plot that there are primarily 2 main countries that have hosted a significant number of successful expeditions over the course of 5 years - namely Nepal with 105 successful expeditions and the USA with 86. Britain proves to be a close runner up, followed by India, China and the other countries - all within a similar order of magnitude to each other.
+
+This seems to support historical narratives whereby Westerners, particularly the British and the Americans^[Trekking in the Himalayas: A brief history, WeAreWorldChallenge, https://weareworldchallenge.com/himalayas-trekking-expeditions-history/], view the aspect of climbing up the Himalayas as a continuation of prestige and an exertion of their soft power on the World - having essentially climbed all the way to the top of the World. 
+
+Naturally, for the countries of Nepal, India and China - their proximity to the Himalayan mountain range also warrants a great number of expeditions to be organised by the members of these nations.  Of course, with the mountain range being within Nepal itself - there is a clear and decisive surge in the number of expeditions organised there successfully. This is likely further influenced by the familiarity of organisations in the country with experienced Sherpa members. Hence - this suggests that to go safe, expeditions organised by Nepal, the US and UK have a great track record ahead.
+</p>
+
+
+## Mountain Heights and Climbing Expeditions
+ 
+
+We now turn towards the relationship between the height of a mountain and the number of expeditions hosted on the mountain itself. While our primary aim is to study the overall trend between these two variables - we also wish to further investigate this relationship across the various regions of mountains in Nepal. This is to observe if there are any major outliers on our presumption that as the height of the mountain increases - the number of expeditions on that mountain also increases.
+
+
+```{r Height Processing}
+# join the 2 dataframes on common PeakIDs
+combined_data <- exped_tidy %>% left_join(peaks_tidy, by = "PEAKID")
+
+peak_climbs <- combined_data %>%
+  group_by(PEAKID, PKNAME, HEIGHTM, REGION_FACTOR) %>%
+  summarise(
+    total_climbs = n(),  
+    .groups = "drop"
+  )
+
+peak_climbs %>% summary(total_climbs)
+```
+
+```{r Height Plot, fig.cap = "*General positive trend between Height of Mountain and Number of Expeditions hosted there<br>- with notable exceptions for Ama Dablam and Himlung Himal*", fig.align = 'center'}
+
+  # plot out number of climbs by height of mountains
+ggplot(peak_climbs, aes(x = HEIGHTM, y = total_climbs)) + 
+  # use LOESS model to showcase monotonically increasing relationship
+  geom_smooth(method = "loess", color = "red", se = FALSE,span = .99) + 
+  # jitter some points for less clustering; shape = 17 for mountain effect
+  geom_jitter(aes(size = total_climbs, color = as.factor(REGION_FACTOR)), 
+      alpha = 0.95,shape=17) +
+  geom_label_repel(
+    data = peak_climbs %>% filter(total_climbs >= 20),  
+  # label mountain peaks for those that have had at least 20 expeditions
+    aes(label = PKNAME),
+    size = 2.5,
+    box.padding = 0.5
+  ) +
+  scale_color_viridis_d(name = "Region", direction = -1) +
+  # set up a logarithmic scale for ease of visualisation 
+  # and prevent clustering of points together 
+  scale_y_log10(breaks=c(1,5,10,25,50,100,150,200)) +
+  scale_x_continuous(
+  breaks = seq(5500, 9000, 500),
+  limits = c(5500, 9000)          
+) +
+  scale_size_continuous(range = c(2.2, 7.7)) +
+  labs(
+    title = "Relationship Between Mountain Height and Number of Expeditions",
+    x = "Height (Meters)",
+    y = "Total Expedition (Count)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "right",
+        plot.title = element_text(hjust = 0.5, face = "bold", size = 12.5)) +
+ # guides function used to enlarge legend shapes for reference
+  guides(size = "none", color = guide_legend(override.aes = list(size = 5)))
+```
+
+ 
+From the visualisation above, we must first note that a logarithmic scale is utilised in order to reflect the huge diversity in the number of expeditions on mountains throughout the year. This is done so as to display the relationship in our data more clearly. In so doing, we can see that there is a monotonically increasing relationship between the height of and number of expeditions on a mountain which - while not perfectly linear - does attribute some exponential trend to increments in the height of mountains and the number of expeditions on them.
+
+We can also see that for the most part, this trend is consistent for all regions, with generally taller mountains having a greater expedition count. This is especially so when a mountain's height is greater than 7500m - likely due to the associated prestige people would have upon climbing such tall mountains. There are some noticeable exceptions to this trend - notably the Ama Dablam and Himlung Himal mountains of the Khumbu-Rolwaling-Makalu and Annapurna-Damodar-Peri regions respectively. 
+
+While these mountains are comparatively 'shorter' at around 7000m tall, they have their reasons for attracting a lot of climbers to scale them - with the Ama Dablam's peak resulting in it being referred to as the Matterhorn of the East^[Ama Dablam Overview, Nepal Himal Peak Profile, https://nepalhimalpeakprofile.org/ama-dablam] and the Jewel of Khumbu^[The jewel of the Khumbu, AlpenGlow Expeditions, https://alpenglowexpeditions.com/blog/the-jewel-of-the-khumbu]. The Himlung Himal mountain, which also offers breathtaking views, is additionally a mountain with a proper balance between its height and ease of climbing - being renowned for its high summit success rate compared to other, taller peaks^[Himlung Himal, NAMAS Adventure, https://www.namasadventure.com/himlung-himal-expedition]. 
+
+We further note that the Khumbu-Rolwaling-Makalu region dominates the others in terms of the number of mountains it has with more than 10 expeditions being hosted on it across all of the years. Given its concentration of mountains greater than 7500m in height, as well as the presence of esteemed peaks like Everest and Ama Dablam - it is perhaps unsurprising that this region constitutes the greatest number of expedition counts in Nepal. 
+
+
+## Seasonality and Climbing Popularity
+
+
+Finally, we analyse the distribution of expeditions across various seasons - using data solely from the year 2022 due to it having the greatest number of expeditions in a single year. This makes it likely to be fairly representative of the collated information; while also allowing for a clean, interpretable plot to be generated.
+
+
+```{r Season Processing}
+chosen_data <- exped_tidy %>% left_join(peaks_tidy, by = "PEAKID") %>% 
+  group_by(YEAR) %>% summarise(count = n()) %>% arrange(desc(count)) 
+print(chosen_data) # showcase number of expeditions per year
+chosen_year <- chosen_data %>% head(1) %>% select(YEAR) %>% pull
+print(chosen_year) # select year with greatest expedition count (2022)
+
+data <- left_join(exped_tidy, peaks_tidy, by = "PEAKID") %>%
+  filter(YEAR == chosen_year) # filter by chosen_year
+
+datatrial <- left_join(exped_tidy, peaks_tidy, by = "PEAKID") %>%
+  filter(YEAR == chosen_year) %>%
+  group_by(REGION_FACTOR, PEAKID) %>%
+  summarise(expeditions_count = n(), .groups = "drop") %>%
+  group_by(REGION_FACTOR) %>%
+  slice_max(expeditions_count, n = 1) %>%
+  arrange(desc(expeditions_count))
+
+data_peaks <- datatrial$REGION_FACTOR
+
+plotdata <- data %>% # filter out non-relevant regions
+  filter(REGION_FACTOR %in% data_peaks) %>%
+  filter(REGION_FACTOR != "Kanjiroba-Far West")
+
+plotdata$SMTDATE = as.Date(plotdata$SMTDATE) # change datatype of columns
+```
+
+```{r Season Plot, warning=FALSE, fig.cap = "*Prime Seasons of Climbing Mountains being Spring and Fall<br>- though depending on Region there can be diversity in the number of Expeditions*", fig.align = 'center'}
+ggplot(plotdata, aes(x = SMTDATE, y = REGION_FACTOR, fill = REGION_FACTOR)) +
+#fill time period from start of Mar - start of June w orange backdrop for Spring
+  annotate("rect",
+          xmin = as.Date("2022-03-01"), xmax = as.Date("2022-06-01"),
+           ymin = -Inf, ymax = Inf,
+           fill = "orange", alpha = 0.3) +
+#fill time period from start of Sept - start of Dec w blue backdrop for Fall
+  annotate("rect",
+          xmin = as.Date("2022-09-01"), xmax = as.Date("2022-12-01"),
+           ymin = -Inf, ymax = Inf,
+           fill = "steelblue", alpha = 0.3)  +
+  geom_density_ridges(scale = 2,alpha = 0.9) + # plot out ridges 
+  labs(title = "Distributions of Expeditions For The Most Popular\nPeaks per Region in 2022",
+       x = "Summit Date",
+       y = "Region",
+       fill = "Region") +
+  scale_fill_viridis_d(option = "C")+
+  scale_x_date(limits = c(as.Date("2022-01-01"), as.Date("2023-01-01")),
+              date_breaks = "3 months",
+              date_labels = "%b %Y") +
+  theme_gray() +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 12.5)) + 
+  theme(legend.position = "", aspect.ratio = 0.6)
+
+```
+
+
+Based on our visualisation, we notice that across most of the regions in Nepal, there are 2 prime seasons - Spring from Mar - Jun (highlighted in orange on the plot) and Fall from Sept - Dec (highlighted in blue on the plot) - during which expeditions are led by various teams on the mountains in those regions. This indeed tallies with records from Adventure groups^[Best Season, ProTrek Adventure, https://www.protrekadventure.com/best-season/] that host such expeditions - as they note that the Summer season months are when the mountains face heavy rainfall due to the monsoon season - while during the Winter months there is often heavy snowfall accompanied by strong winds.
+
+What is perhaps more interesting is to analyse the differences in expedition distributions within (and also between) various regions during the prime climbing seasons of Spring and Fall. Dhaulagiri-Mukut and Annapurna-Damodar-Peri are relatively consistent with their number of expeditions in Spring and Fall, while Khumbu-Rolwaling-Makalu and Kanjiroba-Far West see a drop in their number of expeditions in Fall. On the other hand, Manaslu-Ganesh and Langtang-Jugal see a surge in the number of expeditions in Fall. This is likely due to the geography of these regions in Nepal and the associated attractions and aversions they bring with them alongside differences in climate and natural phenomena. 
+
+For example, both Spring and Fall in the Dhaulagiri-Mukut region^[Best Time For Dhaulagiri Trek, Sherpateams, https://sherpateams.com/blog/best-time-for-dhaulagiri-trek] have relatively similar, stable weather patterns with the option of viewing blooming flowers in Spring contrasted nicely with that of witnessing harvest festivals in Fall being likely to attract climbers in equal numbers for both instances. In contrast, while Spring does also offer its own merits, the Autumn season for expeditions in the Manaslu-Ganesh region is preferred due to it being the post monsoon - yielding a decreased likelihood of rain/ snowfall^[Best Time for Manaslu Circuit Trek, HavenHolidays, https://www.havenholidaysnepal.com/blogs/best-time-for-manaslu-circuit-trek] - making expeditions then much safer; while still being cool for tourists to bear witness to the snowcapped peaks of the Himalayas. Conversely the relative ease of climbing up the Rolwaling Valley in the Khumbu-Rolwaling-Makalu region results in people preferring to go in Spring^[Rolwaling Valley Trek Itinerary, Marvel Adventure, https://www.marveladventure.com/blog/rolwaling-valley-trek-itinerary] - when the snow is not as likely to be as heavy in Fall with a greater guarantee of daylight while climbing.
+
+In general, we can see that most expeditions are either in Spring or Fall, due to more stable and favorable weather conditions, which creates more optimal conditions for climbing and trekking.
+Nonetheless, depending on factors such as the terrain, weather and even cultural elements, particular regions do have their own skewed distributions that result in just 1 season having a greater influx of people than others.
+
+
+# Conclusion
+
+
+In summation, our exploration of the Himalayan expedition data reveals an interesting interplay of factors that influence mountaineering trends. From the dominance of countries like Nepal and the USA in organizing successful expeditions to the compelling correlation between mountain height and the frequency of climbs, it seems clear that motivations to climb are both culturally and geographically nuanced. We note that financially well of countries with a history of interest in the Himalayas like the US and UK have a great degree of success in the expeditions they organise, alongside countries geographically familiar with the Himalayas Mountains like Nepal, India and China. 
+
+The data also demonstrates how higher peaks generally attract more climbers, particularly in renowned regions such as Khumbu-Rolwaling-Makalu - though 'shorter' yet safer and stunning peaks like Himlung Himal and Ama Dablam also attract a great deal of interest from climbers all over. This in turn highlights how both logistical feasibility and the allure of prestige associated with taller peaks play significant roles in shaping mountaineering expedition patterns.
+
+Finally, our seasonality analysis illustrates that environmental conditions are just as critical in determining when expeditions take place. The clear peaks during Spring and Fall align with Nepal’s optimal trekking windows, yet the distribution of activity within these seasons can vary markedly by region. This reflects the diversity of terrain, climate, and regional appeal — where safety, scenic beauty, and cultural factors all converge to influence expedition timing. 
+
+Overall, by diving into nation-level patterns, mountain characteristics, and seasonal behaviors, our project sheds light on the multifaceted question of what truly drives people to mug up a mountain and be a 'Mountainous Mugger'.
+
+
+# Workload Distribution
+
+
+Our group divided the workload for this project equally among our members - with Kyi and Ming Han exploring whether taller mountains are more enticing to climb as well as creating the associated scatter-plot. Meredith and Li Hing also worked with the data to answer the sub-question on the relationship between expeditions and the seasons - crafting the corresponding ridgeline plot. Finally, Rikhil analysed the relationship between organising countries and successful expeditions producing the map visualisation. 
+
+
+## References
+
